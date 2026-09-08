@@ -1,0 +1,86 @@
+# 실시간 한국어 STT 테스트 정리 (Whisper Large v3 @ Elice Cloud)
+
+테스트 일자: 2026-09-08 · 작성: 이정원
+
+## 한 줄 요약
+
+마이크 → Whisper API 파이프라인은 완성됐고 로컬 검증까지 끝났다. 실제 인식 결과는 **API 키가 만료되어 아직 확인하지 못했다.** 새 키만 발급받으면 바로 돌릴 수 있다.
+
+## 현재 상태
+
+| 항목 | 상태 |
+|---|---|
+| 마이크 캡처 (16kHz 모노) | ✅ G435 헤드셋으로 확인 |
+| WAV 변환 · 요청 형식 | ✅ 문서 스펙과 일치 (multipart `file`, `language=korean`) |
+| 서버 도달 | ✅ HTTPS로 인증 단계까지 도달 |
+| 실제 인식 결과 | ⛔ API 키 만료 (`expired_key`) |
+
+## API 확인 결과
+
+문서(`whisper-large-v3-api.md`) 예제와 실제 서비스가 다른 점 2가지.
+
+1. **HTTPS만 동작한다.** 문서는 `http://`인데 실제로는 Cloudflare에서 522 타임아웃. `https://`로 보내야 서버에 도달한다.
+2. **키가 만료됐다.** HTTPS로 보내면 모든 경로(루트, `/v1/audio/transcriptions`, `/openapi.json`)에서 동일 응답:
+   ```json
+   {"error":{"message":"The key has expired.","type":"invalid_request_error","code":"expired_key"}}
+   ```
+   요청 형식은 인증 단계까지 정상 처리되므로 형식 문제는 아니다.
+
+엔드포인트는 파일 업로드 방식이라 **진짜 스트리밍은 불가**하다. "실시간"은 마이크 소리를 짧게 잘라 반복 업로드하는 방식으로 구현했다.
+
+## 구현한 두 가지 방식
+
+### 1. 고정 청크 — `realtime_stt_chunk.py`
+
+N초(기본 5초)마다 무조건 잘라서 전송. RMS 음량이 임계값 미만이면 건너뛴다.
+
+- 장점: 단순, 의존성 적음
+- 단점: 청크 경계에서 단어가 잘림. 자막 지연 = 청크 길이 + 응답 시간
+
+### 2. VAD — `realtime_stt.py` (권장)
+
+`webrtcvad`로 30ms 프레임마다 음성 여부를 판정해 **말이 끝나는 지점**에서 자른다.
+
+- 말 시작 감지 시 직전 300ms를 같이 포함 (첫 음절 보존)
+- 700ms 무음이면 발화 종료로 판단해 전송
+- 400ms 미만 소리는 잡음으로 버림
+- 15초 초과 시 강제 전송 (안전장치)
+
+오프라인 검증: 합성 음성 3회 발화 → 3개 세그먼트로 정확히 분할, 강제 컷 동작 확인, 마이크 콜백 30ms 프레임 정상.
+
+## 주의: 무음에서 "감사합니다" 환각
+
+무음이나 잡음 구간을 보내면 Whisper가 **"감사합니다", "시청해주셔서 감사합니다"** 같은 문장을 만들어낸다. 유튜브 자막 데이터로 학습되어 영상 끝 무음 구간에 그런 자막이 많았기 때문. 코드 버그가 아니라 모델 특성이다.
+
+이 API는 `no_speech_prob` 같은 신뢰도 값을 주지 않으므로 우리 쪽에서 막아야 한다.
+
+- 보내기 전: VAD 민감도 `--aggr 3`, `--min-ms 600`으로 무음이 아예 전송되지 않게
+- 받은 후: 알려진 환각 문구 목록 + 음성 프레임 비율 조건으로 후처리 필터 (미구현)
+
+## 실행 방법
+
+```
+pip install -r requirements.txt
+copy .env.example .env        # STT_API_BASE_URL, STT_API_KEY 입력
+python realtime_stt.py        # VAD 방식
+python realtime_stt_chunk.py  # 고정 청크 방식
+```
+
+주요 옵션: `--aggr 0~3` (VAD 민감도), `--silence-ms` (끊는 무음 길이), `--list-devices` / `--device N` (마이크 선택)
+
+## 파일
+
+| 파일 | 내용 |
+|---|---|
+| `realtime_stt.py` | VAD 방식 |
+| `realtime_stt_chunk.py` | 고정 청크 방식 |
+| `.env.example` | 서비스 주소 / 키 템플릿 (`.env`는 git 제외) |
+| `requirements.txt` | requests, numpy, sounddevice, webrtcvad-wheels |
+| `whisper-large-v3-api.md` | Elice 모델 문서 |
+
+## 다음 할 일
+
+1. Elice Cloud 콘솔에서 API 키 재발급 → `.env` 갱신
+2. 두 방식을 같은 문장으로 비교 (단어 잘림, 지연, 인식률)
+3. 환각 후처리 필터 추가
+4. 비용 확인: Serverless ₩6 / 60초. 무음 필터가 잘 동작하면 실제 발화 시간만 과금
