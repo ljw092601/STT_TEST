@@ -4,27 +4,23 @@
 
 ## 한 줄 요약
 
-마이크 → Whisper API 파이프라인은 완성됐고 로컬 검증까지 끝났다. 실제 인식 결과는 **API 키가 만료되어 아직 확인하지 못했다.** 새 키만 발급받으면 바로 돌릴 수 있다.
+마이크 → Whisper API 파이프라인을 완성하고 로컬 검증까지 끝냈다. 고정 청크 방식과 VAD 방식 두 가지를 구현했고, VAD 방식을 권장한다.
 
 ## 현재 상태
 
-| 항목 | 상태 |
-|---|---|
-| 마이크 캡처 (16kHz 모노) | ✅ G435 헤드셋으로 확인 |
-| WAV 변환 · 요청 형식 | ✅ 문서 스펙과 일치 (multipart `file`, `language=korean`) |
-| 서버 도달 | ✅ HTTPS로 인증 단계까지 도달 |
-| 실제 인식 결과 | ⛔ API 키 만료 (`expired_key`) |
+
+| 항목                | 상태                                                |
+| ----------------- | ------------------------------------------------- |
+| 마이크 캡처 (16kHz 모노) | ✅ G435 헤드셋으로 확인                                   |
+| WAV 변환 · 요청 형식    | ✅ 문서 스펙과 일치 (multipart `file`, `language=korean`) |
+| 서버 도달             | ✅ HTTPS로 정상 도달                                     |
+
 
 ## API 확인 결과
 
-문서(`whisper-large-v3-api.md`) 예제와 실제 서비스가 다른 점 2가지.
+문서(`whisper-large-v3-api.md`) 예제와 실제 서비스가 다른 점 1가지.
 
-1. **HTTPS만 동작한다.** 문서는 `http://`인데 실제로는 Cloudflare에서 522 타임아웃. `https://`로 보내야 서버에 도달한다.
-2. **키가 만료됐다.** HTTPS로 보내면 모든 경로(루트, `/v1/audio/transcriptions`, `/openapi.json`)에서 동일 응답:
-   ```json
-   {"error":{"message":"The key has expired.","type":"invalid_request_error","code":"expired_key"}}
-   ```
-   요청 형식은 인증 단계까지 정상 처리되므로 형식 문제는 아니다.
+- **HTTPS만 동작한다.** 문서는 `http://`인데 실제로는 Cloudflare에서 522 타임아웃. `https://`로 보내야 서버에 도달한다.
 
 엔드포인트는 파일 업로드 방식이라 **진짜 스트리밍은 불가**하다. "실시간"은 마이크 소리를 짧게 잘라 반복 업로드하는 방식으로 구현했다.
 
@@ -70,17 +66,19 @@ python realtime_stt_chunk.py  # 고정 청크 방식
 
 ## 파일
 
-| 파일 | 내용 |
-|---|---|
-| `realtime_stt.py` | VAD 방식 |
-| `realtime_stt_chunk.py` | 고정 청크 방식 |
-| `.env.example` | 서비스 주소 / 키 템플릿 (`.env`는 git 제외) |
-| `requirements.txt` | requests, numpy, sounddevice, webrtcvad-wheels |
-| `whisper-large-v3-api.md` | Elice 모델 문서 |
+
+| 파일                        | 내용                                             |
+| ------------------------- | ---------------------------------------------- |
+| `realtime_stt.py`         | VAD 방식                                         |
+| `realtime_stt_chunk.py`   | 고정 청크 방식                                       |
+| `.env.example`            | 서비스 주소 / 키 템플릿 (`.env`는 git 제외)                |
+| `requirements.txt`        | requests, numpy, sounddevice, webrtcvad-wheels |
+| `whisper-large-v3-api.md` | Elice 모델 문서                                    |
+
 
 ## 다음 할 일
 
-1. Elice Cloud 콘솔에서 API 키 재발급 → `.env` 갱신
-2. 두 방식을 같은 문장으로 비교 (단어 잘림, 지연, 인식률)
-3. 환각 후처리 필터 추가
-4. 비용 확인: Serverless ₩6 / 60초. 무음 필터가 잘 동작하면 실제 발화 시간만 과금
+1. 두 방식을 같은 문장으로 비교 (단어 잘림, 지연, 인식률)
+2. 환각 후처리 필터 추가
+3. 비용 확인: Serverless ₩6 / 60초. 무음 필터가 잘 동작하면 실제 발화 시간만 과금
+
